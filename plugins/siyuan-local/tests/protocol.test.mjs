@@ -46,7 +46,10 @@ test('stdio lifecycle, discovery, native settings schema and real elicitation ac
     assert.equal(init.result.protocolVersion,'2025-11-25');assert.equal(init.result.capabilities.experimental['openai/settings'].readTool,'settings.read');
     send({method:'notifications/initialized'});
     const discover=await request('server/discover');assert.equal(discover.result.resultType,'complete');
-    const listed=await request('tools/list');assert.equal(listed.result.tools.length,14);
+    const listed=await request('tools/list');assert.equal(listed.result.tools.length,18);
+    const pageJson=JSON.stringify({thread:{id:'protocol-current-chat',kind:'codex',title:'Protocol chat'},page:{order:'newest_first',hasMore:false,nextCursor:null},turns:[{id:'turn-1',status:'completed',items:[{type:'userMessage',id:'user-1',content:[{type:'text',text:'原始聊天文字'}]}]}]});
+    const captured=await call('siyuan_ingest_chat_page',{pageJson});assert.equal(captured.structuredContent.ready,true);
+    const chatText=await call('siyuan_read_captured_chat',{captureId:captured.structuredContent.captureId});assert.ok(chatText.structuredContent.content.includes('原始聊天文字'));assert.equal(writes,0);
     const configure=listed.result.tools.find(t=>t.name==='siyuan_configure');
     assert.ok(configure);assert.ok(!configure._meta?.ui?.visibility || configure._meta.ui.visibility.includes('model'));
     assert.deepEqual(configure.inputSchema.properties,{});
