@@ -1,0 +1,8 @@
+node_modules/
+settings.json
+*.tmp
+*.log
+*.zip
+*.tar.gz
+.env
+.env.*
