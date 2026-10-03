@@ -1,8 +1,8 @@
 {
   "interface": {
     "displayName": "思源笔记 · 本地连接",
-    "shortDescription": "本机笔记搜索与确认写入",
-    "longDescription": "通过 Windows 上的本地 MCP 服务访问思源 HTTP API。支持笔记与块搜索、文档 Markdown 与块源码读取、创建文档、追加内容及更新块。设置中配置回环 API 地址，并在本机密码窗口配置 token，以 Windows DPAPI 加密保存。写入先生成预览，再由用户确认；目标变化时中止。需要支持本地插件的桌面宿主、Node.js 22+ 和运行中的思源。",
+    "shortDescription": "本机笔记连接与聊天归档",
+    "longDescription": "通过 Windows 本地 MCP 服务访问思源 HTTP API。支持搜索、读取和确认写入笔记；读取当前 Codex 聊天的完整持久化文字，或导入配套 Edge/Chrome 扩展抓取的当前 ChatGPT 网页文字，保存原文或总结摘要。原文直接使用不可变快照。Token 由本机密码窗口配置，使用 Windows DPAPI 加密保存。需要本地桌面宿主、Node.js 22+ 和运行中的思源；网页抓取需安装配套浏览器扩展并核对首尾。",
     "developerName": "SiYuan Local Plugin",
     "category": "Productivity",
     "capabilities": [
@@ -25,8 +25,8 @@
     }
   },
   "name": "siyuan-local",
-  "version": "1.0.1",
-  "description": "在 Windows 本机连接思源笔记，搜索与读取笔记，确认后创建文档、追加内容和更新块。",
+  "version": "1.1.0",
+  "description": "在 Windows 本机连接思源笔记，搜索与读取笔记，抓取当前聊天文字并确认后保存原文或摘要。",
   "author": {
     "name": "SiYuan Local Plugin"
   },
