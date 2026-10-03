@@ -4,7 +4,7 @@ import {Service, TOOLS} from './core.mjs';
 const versions=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
 const settings={readTool:'settings.read',updateTool:'settings.update'};
 const caps={tools:{listChanged:false},experimental:{'openai/settings':settings},extensions:{'openai/settings':settings}};
-const info={name:'siyuan-local',version:'1.0.1'};
+const info={name:'siyuan-local',version:'1.1.0'};
 let clientCaps={},initialized=false,seq=0;
 const outbound=new Map();
 const active=new Map();

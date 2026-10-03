@@ -4,6 +4,7 @@ import os from 'node:os';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {randomUUID, createHash} from 'node:crypto';
+import {ChatCaptures, MAX_CHAT_BYTES} from './chat.mjs';
 
 const WINDOWS = fileURLToPath(new URL('./windows.ps1', import.meta.url));
 const ID = '^\\d{14}-[a-z0-9]{7}$';
@@ -27,7 +28,11 @@ export const TOOLS = [
   tool('siyuan_update_block','更新块','先预览替换整个块（容器含子块）；expectedHash 可防止覆盖已变化的内容。',object({id:idSchema,markdown,expectedHash:{type:'string',pattern:'^[a-f0-9]{64}$'}},['id','markdown'])),
   tool('siyuan_commit_write','确认并执行写入','触发用户确认窗口；只有用户在窗口确认才执行。预览有效期 10 分钟，单次使用；异常结果不自动重试。',object({operationId:{type:'string',format:'uuid'}},['operationId']),writeHint),
   tool('siyuan_cancel_write','取消待确认写入','移除预览，不写入思源。',object({operationId:{type:'string',format:'uuid'}},['operationId']),{...writeHint,destructiveHint:false,idempotentHint:true}),
-  tool('siyuan_configure','打开思源连接配置','通过插件本地进程打开 Windows 配置窗口；API 地址下方是 Token 密码框。不要在聊天中发送 Token。取消不会保存。',object(),{...writeHint,destructiveHint:false})
+  tool('siyuan_configure','打开思源连接配置','通过插件本地进程打开 Windows 配置窗口；API 地址下方是 Token 密码框。不要在聊天中发送 Token。取消不会保存。',object(),{...writeHint,destructiveHint:false}),
+  tool('siyuan_capture_current_chat','抓取当前聊天记录','Codex：使用可信的当前 threadId 读取完整持久化历史，不能猜测最近聊天。网页：导入当前 ChatGPT 页面配套扩展导出的 JSON；不读取其他窗口。返回不可变快照，不写入思源。',object({source:{type:'string',enum:['codex','chatgpt-web']},threadId:{type:'string',minLength:8,maxLength:100},captureFile:{type:'string',maxLength:2000}},['source'])),
+  tool('siyuan_ingest_chat_page','导入宿主聊天原始分页','Codex CLI 不可用时，将 read_thread 当前聊天的原始响应直接传入 pageJson，不能重写消息。第一页不传 captureId/requestCursor；之后使用返回游标，直到 ready=true。不是模型总结。',object({pageJson:{type:'string',maxLength:1500000},captureId:{type:'string',format:'uuid'},requestCursor:{type:'string',maxLength:20000}},['pageJson'])),
+  tool('siyuan_read_captured_chat','读取抓取快照','分页读取抓取后的完整文字快照用于检查或总结；hash 对应完整 Markdown。nextOffset 非空时继续读取。',object({captureId:{type:'string',format:'uuid'},offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:100000}},['captureId'])),
+  tool('siyuan_save_captured_chat','保存聊天原文或摘要预览','original 直接用不可变快照生成思源预览，不经模型重写。summary 用读完快照后生成的 summaryMarkdown。新建传 notebook/path，追加传 parentId；必须再调用 siyuan_commit_write 由用户确认。',object({captureId:{type:'string',format:'uuid'},mode:{type:'string',enum:['original','summary']},summaryMarkdown:{type:'string',minLength:1,maxLength:100000},notebook:idSchema,path:{type:'string',minLength:2,maxLength:1000},parentId:idSchema},['captureId','mode']))
 ];
 TOOLS[0].outputSchema = object({schema:{type:'object'},values:{type:'object'},layout:{type:'array',items:{type:'object'}}},['schema','values']);
 TOOLS[1].outputSchema = object({values:{type:'object'}},['values']);
@@ -139,13 +144,27 @@ function kramdown(data) {if(typeof data?.kramdown!=='string')throw new Error('�
 function documentPath(p) {if(!p.startsWith('/') || p.endsWith('/') || p.includes('\\') || /[\u0000-\u001f]/.test(p) || p.split('/').slice(1).some(s=>!s.trim() || ['.','..'].includes(s))) throw new Error('文档路径必须以 / 开头，每层非空，不能含 .、..、反斜线或控制字符。');return p;}
 
 export class Service {
-  constructor({config=new Config(),api,confirm,now=Date.now}={}) {this.config=config;this.api=api??new Api(config);this.confirm=confirm??(async message=>JSON.parse(await windows('confirm',{message})).accepted);this.now=now;this.pending=new Map();this.busy=false;this.configuring=false;}
+  constructor({config=new Config(),api,confirm,now=Date.now,chatCaptures}={}) {this.config=config;this.api=api??new Api(config);this.confirm=confirm??(async message=>JSON.parse(await windows('confirm',{message})).accepted);this.now=now;this.chats=chatCaptures??new ChatCaptures({now});this.pending=new Map();this.busy=false;this.configuring=false;}
   async settings() {
     const c=await this.config.load();
     return {schema:{type:'object',properties:{apiUrl:{type:'string',title:'思源 API 地址',description:'仅限本机回环地址，默认 http://127.0.0.1:6806'}}},values:{apiUrl:c.apiUrl},layout:[{kind:'group',title:c.tokenCipher?'思源连接（Token 已保存）':'思源连接（Token 未配置）',items:[{kind:'property',property:'apiUrl'},{kind:'tool',tool:'settings.configure',title:'配置地址和 API Token…',description:'在本机密码输入框填写 token，不在聊天中发送。'},{kind:'tool',tool:'siyuan_status',title:'测试连接'}]}]};
   }
   async call(name,a={},signal) {
     const t=TOOLS.find(t=>t.name===name);if(!t)throw new Error('未知工具。');validate(t.inputSchema,a);
+    if(name==='siyuan_capture_current_chat')return this.chats.capture(a,signal);
+    if(name==='siyuan_ingest_chat_page')return this.chats.ingest(a);
+    if(name==='siyuan_read_captured_chat')return this.chats.read(a);
+    if(name==='siyuan_save_captured_chat') {
+      const snapshot=this.chats.get(a.captureId);
+      if(snapshot.capture.coverage==='page-text-unverified')throw new Error('网页记录尚未核对首尾，请在扩展中核对后重新导出。');
+      if(a.mode==='original'&&a.summaryMarkdown!==undefined)throw new Error('保存原文不接收模型改写内容。');
+      if(a.mode==='summary'&&!a.summaryMarkdown)throw new Error('摘要模式需要 summaryMarkdown。');
+      if(a.parentId?(a.notebook!==undefined||a.path!==undefined):(!a.notebook||!a.path))throw new Error('请明确新建 notebook/path 或追加 parentId，两者不能混用。');
+      const text=a.mode==='original'?snapshot.markdown:`# ${snapshot.capture.title.replace(/[\r\n]/g,' ')}（摘要）\n\n来源：${snapshot.capture.source}\n聊天 ID：${snapshot.capture.conversationId}\n原文 SHA-256：${snapshot.hash}\n抓取时间：${snapshot.capture.capturedAt}\n\n${snapshot.capture.warnings.map(w=>'> '+w).join('\n')}\n\n${a.summaryMarkdown}`;
+      if(Buffer.byteLength(text)>MAX_CHAT_BYTES)throw new Error('待保存记录超过 8 MiB；未截断，请分段保存。');
+      const result=await this.prepare(a.parentId?'siyuan_append_content':'siyuan_create_document',a.parentId?{parentId:a.parentId,markdown:text}:{notebook:a.notebook,path:a.path,markdown:text});
+      return {...result,captureId:a.captureId,mode:a.mode,sourceHash:snapshot.hash,messageCount:snapshot.capture.messages.length};
+    }
     if(name==='settings.read')return this.settings();
     if(name==='settings.update') {if(this.busy)throw new Error('写入确认期间无法修改连接。');const c=await this.config.load();await this.config.save({...c,...a.set});this.pending.clear();return {values:{apiUrl:normalizeUrl(a.set.apiUrl)}};}
     if(name==='settings.configure'||name==='siyuan_configure') {
