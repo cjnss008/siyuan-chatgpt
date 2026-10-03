@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>思源聊天抓取</title><link rel="stylesheet" href="popup.css"></head>
+<body><h1>思源聊天抓取</h1><p>在当前 ChatGPT 对话中点击抓取，保持此面板打开。随后核对首尾消息。</p>
+<button id="capture">抓取当前对话</button><p id="status" role="status"></p>
+<section id="preview" hidden><p id="count"></p><h2>最早一条</h2><pre id="first"></pre><h2>最后一条</h2><pre id="last"></pre>
+<label><input id="verified" type="checkbox">我已核对首尾，与当前对话一致</label><button id="download" disabled>导出记录给思源插件</button></section>
+<p>仅在点击后读取当前页；不读取登录凭据，不上传聊天。</p><script src="popup.js" type="module"></script></body></html>
