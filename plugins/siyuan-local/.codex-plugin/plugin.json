@@ -1,0 +1,43 @@
+{
+  "interface": {
+    "displayName": "思源笔记 · 本地连接",
+    "shortDescription": "本机笔记搜索与确认写入",
+    "longDescription": "通过 Windows 上的本地 MCP 服务访问思源 HTTP API。支持笔记与块搜索、文档 Markdown 与块源码读取、创建文档、追加内容及更新块。设置中配置回环 API 地址，并在本机密码窗口配置 token，以 Windows DPAPI 加密保存。写入先生成预览，再由用户确认；目标变化时中止。需要支持本地插件的桌面宿主、Node.js 22+ 和运行中的思源。",
+    "developerName": "SiYuan Local Plugin",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
+    "brandColor": "#2563EB",
+    "defaultPrompt": [
+      "帮我配置本机思源连接并测试。",
+      "搜索思源笔记中的项目计划。",
+      "起草一篇思源文档，预览并让我确认写入。"
+    ]
+  },
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/siyuan-setup/SKILL.md"
+    }
+  },
+  "name": "siyuan-local",
+  "version": "1.0.1",
+  "description": "在 Windows 本机连接思源笔记，搜索与读取笔记，确认后创建文档、追加内容和更新块。",
+  "author": {
+    "name": "SiYuan Local Plugin"
+  },
+  "keywords": [
+    "siyuan",
+    "notes",
+    "local",
+    "windows",
+    "mcp"
+  ],
+  "license": "MIT",
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json"
+}
