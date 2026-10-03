@@ -29,6 +29,20 @@
 | `siyuan_cancel_write` | 取消待确认预览 |
 | `settings.read` / `settings.update` / `settings.configure` | 设置读取、地址更新、本机 token 配置 |
 | `siyuan_configure` | 聊天可调用的配置窗口入口，取消不保存，不接收聊天中的 token |
+| `siyuan_capture_current_chat` | 读取当前 Codex 完整持久化文字，或导入当前网页扩展抓取文件 |
+| `siyuan_ingest_chat_page` | CLI 不可用时直接导入桌面宿主 read_thread 原始分页 |
+| `siyuan_read_captured_chat` | 分页读取不可变聊天快照用于核对或总结 |
+| `siyuan_save_captured_chat` | 将快照原文或摘要生成新建/追加预览，仍需确认 |
+
+## 当前聊天归档（1.1.0）
+
+在 Codex 桌面聊天中请求“抓取当前聊天完整文字，保留原文保存到指定思源笔记本”。插件按当前窗口的可信 threadId 使用官方 `codex app-server` 的 `thread/read(includeTurns=true)`；找不到 CLI 时，可由桌面宿主 `read_thread` 从第一页到最后一页直接导入原始响应。不能猜测最近的聊天，也不使用共享 MCP 进程启动时的旧聊天 ID。CLI 可通过 `SIYUAN_CODEX_EXECUTABLE` 指定绝对路径。
+
+Edge/Chrome 中的 ChatGPT 网页需要安装 [配套浏览器扩展](browser-extension/README.zh-CN.md)。它通过用户点击临时读取当前页面，滚动收集文字，再显示首尾供用户核对。导出 JSON 后，把所选文件绝对路径交给本机插件导入并生成思源保存预览。没有 ChatGPT 登录凭据读取、后台标签页监控或私有接口抓取。
+
+原文保存直接使用服务器内的不可变快照，逐条保留文字、空格和换行，不让模型重新拼写。摘要保存先分页读完快照再总结，标记“摘要”并记录来源 hash。支持新建文档和追加；仍由用户确认后才写入。
+
+“完整文字”范围是当前聊天中的用户与助手消息。Codex 从持久化历史读取；网页仅收集当前选中分支的渲染文字，需要人工核对首尾，不能证明后台历史完整。系统提示、隐藏推理、工具内部输出、附件文件、折叠详情和其他分支不自动复制。尚未完成的回复只能保存抓取时已持久化的快照。思源会按 Markdown 渲染文字，界面排版不保证一致。快照一小时过期、进程重启后消失，上限 8 MiB；缺失、截断或超限会报错，不静默丢段。
 
 示例：“搜索思源笔记里包含‘项目计划’的文档”；“读取这篇文档的全文”；“在指定笔记本的 `/工作/周报` 创建文档，先让我确认”。
 
