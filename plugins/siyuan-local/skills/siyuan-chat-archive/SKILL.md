@@ -1,6 +1,6 @@
 ---
 name: siyuan-chat-archive
-description: 用户要抓取当前 Codex 桌面或 ChatGPT 网页聊天完整文字记录，保留原文或总结压缩后保存到本机思源笔记时使用。
+description: 用户要抓取当前 Codex 桌面或 ChatGPT 网页聊天完整文字和图片记录，保留原文或总结压缩后保存到本机思源笔记时使用。
 ---
 
 # 当前聊天抓取与归档
@@ -24,9 +24,12 @@ description: 用户要抓取当前 Codex 桌面或 ChatGPT 网页聊天完整文
 
 ## 保存
 
-- 返回 messageCount、coverage、warnings、hash，说明抓取范围。范围是用户与助手文字；系统提示、隐藏推理、工具内部输出、附件文件、未选中的其他分支不在原文范围内。原始文字保留空格和换行，思源会按 Markdown 渲染。当前尚未结束的回复只能保存抓取时已持久化的快照；说明此限制。
+- 返回 messageCount、coverage、warnings、hash，说明抓取范围。范围是用户与助手文字；系统提示、隐藏推理、工具内部文字输出、非图片附件文件、未选中的其他分支不在原文范围内。原始文字保留空格和换行，思源会按 Markdown 渲染。当前尚未结束的回复只能保存抓取时已持久化的快照；说明此限制。
 - 原文：调用 siyuan_save_captured_chat(mode=original,captureId=...)，不传 summaryMarkdown。服务器直接使用不可变快照，避免模型改写、漏段和长文本工具参数截断。
 - 摘要：用 siyuan_read_captured_chat 分页读完快照，直到 nextOffset=null，再总结。保留结论、关键事实、代码或操作、未解决问题和待办；明确标记摘要。调用 siyuan_save_captured_chat(mode=summary,summaryMarkdown=...)。
 - 新建明确 notebook/path；追加明确 parentId，不能默认选择笔记本或混用目的地。
 - 保存工具仅返回待确认预览；长记录的 preview 是短摘要，previewTruncated=true。完整预览可用 siyuan_read_write_preview 分页读取。展示目的地、消息数、字符数和抓取范围，避免向审批表单或工具日志塞入整篇聊天。调用 siyuan_commit_write 默认使用独立 Windows 窗口，窗口提供可滚动全文和固定按钮；不默认使用宿主表单。用户拒绝后停止。界面没有确认控件时不要反复重试同一路径。成功后读块核对，不自动重试不确定的写入。
-- 快照只保存在插件进程内存中，一小时过期；重新加载后需重新抓取。上限 8 MiB，超限报错，不静默截断。
+- 默认 includeImages=true，同时保存图片文件。Codex 直接抓取时读取图片原文件并报告 imageCount、imageBytes、missingImages、imageCoverage；宿主分页导入的图片在保存预览时读取。正文链接和附件图片由服务器处理，不能由模型重写为假地址。任一图片缺失时停止完整保存并说明，不自动降级为文字；只有用户明确只要文字才传 includeImages=false。
+- 网页需要 1.2.0 配套扩展，导出 JSON 包含页面可下载的图片字节。仅提供缩略图时无法保证原始分辨率；过期链接、跨源限制或历史缺失的文件无法恢复。用户仍需核对首尾，不能代替勾选。
+- 确认预览包括图片数量、字节数和 SHA-256；用户确认后才将原字节上传到思源 /assets/，再将正文图片引用改为 assets/...。取消不会上传。摘要模式附上全部原聊天图片。资源上传和正文写入不是同一事务；asset_upload_incomplete 表示正文未写入且资源可能保留，document_write_uncertain 表示正文结果不确定。说明已知资源并先读目标核对，不能自动重试。成功后读文档核对图片资源引用。
+- 快照只保存在内存，一小时过期，重新加载需重抓。文字 8 MiB；单图 20 MiB、合计 100 MiB，图片来源最多 200 个；网页 JSON 144 MiB。支持 PNG/JPEG/GIF/WebP/BMP/TIFF/AVIF，其他格式或超限报错，不静默截断。
