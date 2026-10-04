@@ -1,8 +1,8 @@
 {
   "interface": {
     "displayName": "思源笔记 · 本地连接",
-    "shortDescription": "本机笔记连接与聊天归档",
-    "longDescription": "通过 Windows 本地 MCP 服务访问思源 HTTP API。支持搜索、读取和确认写入笔记；抓取当前 Codex 聊天或导入配套 Edge/Chrome 扩展抓取的当前 ChatGPT 网页，保存原文或摘要及图片文件。图片按 SHA-256 去重，确认后上传到思源资源库并替换引用；缺失图片时停止完整保存。Token 使用本机密码窗口配置和 Windows DPAPI 加密。需要 Windows 本地桌面宿主、Node.js 22+ 和运行中的思源；网页需安装配套扩展并核对首尾，只能保存页面可下载的图片版本。",
+    "shortDescription": "本机笔记、聊天归档与知识地图",
+    "longDescription": "通过 Windows 本地 MCP 服务访问思源 HTTP API。支持搜索、读取和确认写入笔记；抓取当前 Codex 聊天或导入配套 Edge/Chrome 扩展抓取的当前 ChatGPT 网页，保存原文或摘要及图片文件。图片按 SHA-256 去重，确认后上传到思源资源库并替换引用；缺失图片时停止完整保存。Token 使用本机密码窗口配置和 Windows DPAPI 加密。需要 Windows 本地桌面宿主、Node.js 22+ 和运行中的思源；网页需安装配套扩展并核对首尾，只能保存页面可下载的图片版本。 支持全库清单、双向引用查询、带块 ID 的原文分页、证据片段核对、本机持久进度和批量新建预览。语义分析由对话中的 AI 完成，保留原文，模型不能代替用户批准写入；批次不是原子事务，未知结果不自动重试。",
     "developerName": "SiYuan Local Plugin",
     "category": "Productivity",
     "capabilities": [
@@ -25,8 +25,8 @@
     }
   },
   "name": "siyuan-local",
-  "version": "1.2.1",
-  "description": "在 Windows 本机连接思源笔记，抓取当前聊天文字和图片，确认后保存原文或摘要。",
+  "version": "1.3.0",
+  "description": "在 Windows 本机连接思源笔记，保存聊天文字和图片，建立带来源证据与处理进度的知识地图。",
   "author": {
     "name": "SiYuan Local Plugin"
   },
