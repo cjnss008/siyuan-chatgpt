@@ -17,8 +17,8 @@ description: 用户要通过本机思源笔记搜索、读取文档或块、创�
 ## 写入
 
 1. 明确用户的目的地和内容。更新前读取块；提交 expectedHash 使用完整源码 hash，防止覆盖变化的内容。追加时选文档 root_id 或经核实的容器 ID。
-2. 调用 `siyuan_create_document`、`siyuan_append_content` 或 `siyuan_update_block` 生成预览。这些工具不写入。向用户展示操作、目的地和拟写入内容；替换容器会影响子块，创建层级路径可能创建父文档。
-3. 只有在用户已经请求写入此内容的范围内，调用 `siyuan_commit_write` 打开用户确认。服务通过 MCP 表单或 Windows 原生窗口再次核对完整内容。模型不能代替用户接受表单，不能伪造确认或绕过窗口。
+2. 调用 `siyuan_create_document`、`siyuan_append_content` 或 `siyuan_update_block` 生成预览。这些工具不写入。向用户展示操作、目的地和拟写入内容；替换容器会影响子块，创建层级路径可能创建父文档。长内容返回 previewTruncated=true，preview 只是摘要；完整预览可用 `siyuan_read_write_preview(operationId,offset,limit)` 分页读取，不要把摘要称为全文。避免把整篇聊天重复打印到工具输出或审批消息中。
+3. 只有在用户已经请求写入此内容的范围内，调用 `siyuan_commit_write` 打开用户确认。默认 confirmationUi=native，由本地插件进程打开独立 Windows 窗口，正文滚动、确认和取消按钮固定可见；用户有两分钟核对，超时关闭且不写入。不要从代理沙箱启动窗口。宿主表单不再作为默认入口；用户明确要求备用宿主表单时才传 confirmationUi=host，它只展示短摘要，需先提供完整预览供核对，一分钟无响应会结束。模型不能代替用户接受窗口或表单，不能伪造确认或绕过确认。没有看到确认控件时报告界面问题，不反复触发同一确认；取消请求会结束本机窗口并释放等待。
 4. 用户拒绝后停止本次写入，不自动重建并再次提示。需要取消预览时调用 `siyuan_cancel_write`。
 5. 成功后读块核对。返回 API 成功不保证搜索索引已更新。确认期间目标变化时重新读取并准备新预览；不能自动覆盖。
 6. 超时或连接中断后可能已经写入。先核对目标状态，再报告结果。不能自动重试创建、追加或替换。
