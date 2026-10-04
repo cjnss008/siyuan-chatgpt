@@ -31,7 +31,7 @@ test('stdio lifecycle, discovery, native settings schema and real elicitation ac
   lines.on('line',line=>{
     const m=JSON.parse(line); // Any stdout log breaks this test.
     if(m.method==='elicitation/create') {
-      elicitations++;assert.ok(m.params.message.includes('After'));assert.equal(m.params.requestedSchema.properties.confirm.default,false);
+      elicitations++;assert.ok(m.params.message.includes('After'));assert.ok(m.params.message.length<=2000);assert.equal(m.params.requestedSchema.properties.confirm.default,false);
       send({id:m.id,result:accept?{action:'accept',content:{confirm:true}}:{action:'decline'}});
     } else {
       const p=pending.get(m.id);assert.ok(p);pending.delete(m.id);clearTimeout(p.timer);p.resolve(m);
@@ -46,7 +46,7 @@ test('stdio lifecycle, discovery, native settings schema and real elicitation ac
     assert.equal(init.result.protocolVersion,'2025-11-25');assert.equal(init.result.capabilities.experimental['openai/settings'].readTool,'settings.read');
     send({method:'notifications/initialized'});
     const discover=await request('server/discover');assert.equal(discover.result.resultType,'complete');
-    const listed=await request('tools/list');assert.equal(listed.result.tools.length,18);
+    const listed=await request('tools/list');assert.equal(listed.result.tools.length,19);
     const pageJson=JSON.stringify({thread:{id:'protocol-current-chat',kind:'codex',title:'Protocol chat'},page:{order:'newest_first',hasMore:false,nextCursor:null},turns:[{id:'turn-1',status:'completed',items:[{type:'userMessage',id:'user-1',content:[{type:'text',text:'原始聊天文字'}]}]}]});
     const captured=await call('siyuan_ingest_chat_page',{pageJson});assert.equal(captured.structuredContent.ready,true);
     const chatText=await call('siyuan_read_captured_chat',{captureId:captured.structuredContent.captureId});assert.ok(chatText.structuredContent.content.includes('原始聊天文字'));assert.equal(writes,0);
@@ -58,10 +58,15 @@ test('stdio lifecycle, discovery, native settings schema and real elicitation ac
     assert.ok((await call('settings.read')).structuredContent.layout[0].items.some(i=>i.tool==='settings.configure'));
     assert.equal((await call('siyuan_status')).structuredContent.connected,true);
     const p=(await call('siyuan_update_block',{id,markdown:'After'})).structuredContent;assert.equal(writes,0);
-    assert.equal((await call('siyuan_commit_write',{operationId:p.operationId})).structuredContent.written,false);assert.equal(writes,0);
+    assert.equal((await call('siyuan_commit_write',{operationId:p.operationId,confirmationUi:'host'})).structuredContent.written,false);assert.equal(writes,0);
     accept=true;const p2=(await call('siyuan_update_block',{id,markdown:'After'})).structuredContent;
-    assert.equal((await call('siyuan_commit_write',{operationId:p2.operationId})).structuredContent.written,true);assert.equal(writes,1);assert.equal(elicitations,2);
+    assert.equal((await call('siyuan_commit_write',{operationId:p2.operationId,confirmationUi:'host'})).structuredContent.written,true);assert.equal(writes,1);assert.equal(elicitations,2);
     assert.equal((await call('siyuan_commit_write',{operationId:p2.operationId})).isError,true);
+    const long='After\n'+'Long transcript\n'.repeat(4000);
+    const p3=(await call('siyuan_update_block',{id,markdown:long})).structuredContent;
+    assert.equal(p3.previewTruncated,true);assert.ok(p3.preview.length<=2000);
+    const full=await call('siyuan_read_write_preview',{operationId:p3.operationId,limit:100000});assert.ok(full.structuredContent.content.includes(long));
+    assert.equal((await call('siyuan_commit_write',{operationId:p3.operationId,confirmationUi:'host'})).structuredContent.written,true);assert.equal(writes,2);
     assert.equal((await request('not/a/method')).error.code,-32601);
     assert.equal(stderr,'');
   } finally {
