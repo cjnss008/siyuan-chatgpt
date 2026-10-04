@@ -5,7 +5,7 @@ import {HostRequests, createConfirmation} from './confirmation.mjs';
 const versions=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
 const settings={readTool:'settings.read',updateTool:'settings.update'};
 const caps={tools:{listChanged:false},experimental:{'openai/settings':settings},extensions:{'openai/settings':settings}};
-const info={name:'siyuan-local',version:'1.2.1'};
+const info={name:'siyuan-local',version:'1.3.0'};
 let clientCaps={},initialized=false;
 const active=new Map();
 function send(value) {process.stdout.write(JSON.stringify({jsonrpc:'2.0',...value})+'\n');}

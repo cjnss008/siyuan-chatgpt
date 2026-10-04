@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {randomUUID, createHash} from 'node:crypto';
 import {ChatCaptures, MAX_CHAT_BYTES, renderChat} from './chat.mjs';
 import {hydrateImages, imageMarkdown, replaceImageLinks} from './images.mjs';
+import {Knowledge, KNOWLEDGE_TOOLS} from './knowledge.mjs';
 
 const WINDOWS = fileURLToPath(new URL('./windows.ps1', import.meta.url));
 const ID = '^\\d{14}-[a-z0-9]{7}$';
@@ -37,6 +38,7 @@ export const TOOLS = [
   tool('siyuan_save_captured_chat','保存聊天原文或摘要预览','original 使用不可变快照；summary 使用 summaryMarkdown，并附原聊天图片。默认 includeImages=true：确认后上传原图到思源 assets 并替换引用，任一图片缺失时停止完整保存。用户明确只保存文字才设 false。新建传 notebook/path，追加传 parentId；必须再调用 siyuan_commit_write 由用户确认。',object({captureId:{type:'string',format:'uuid'},mode:{type:'string',enum:['original','summary']},includeImages:{type:'boolean'},summaryMarkdown:{type:'string',minLength:1,maxLength:100000},notebook:idSchema,path:{type:'string',minLength:2,maxLength:1000},parentId:idSchema},['captureId','mode']))
 ];
 TOOLS[0].outputSchema = object({schema:{type:'object'},values:{type:'object'},layout:{type:'array',items:{type:'object'}}},['schema','values']);
+TOOLS.push(...KNOWLEDGE_TOOLS);
 TOOLS[1].outputSchema = object({values:{type:'object'}},['values']);
 // Settings controls are user-facing, not instructions to send a secret through chat.
 for (const t of TOOLS.slice(0,3)) t._meta = {ui:{visibility:['app']}};
@@ -50,6 +52,11 @@ export function validate(schema, value, label='arguments') {
       if (!(key in schema.properties)) {if (schema.additionalProperties===false) bad(); continue;}
       validate(schema.properties[key],v,`${label}.${key}`);
     }
+  } else if (schema.type==='array') {
+    if(!Array.isArray(value))bad();
+    if(schema.minItems!==undefined&&value.length<schema.minItems)bad();
+    if(schema.maxItems!==undefined&&value.length>schema.maxItems)bad();
+    value.forEach((v,i)=>validate(schema.items,v,`${label}[${i}]`));
   } else if (schema.type==='string') {
     if (typeof value!=='string') bad();
     if (schema.minLength!==undefined && value.length<schema.minLength) bad();
@@ -156,13 +163,14 @@ function kramdown(data) {if(typeof data?.kramdown!=='string')throw new Error('�
 function documentPath(p) {if(!p.startsWith('/') || p.endsWith('/') || p.includes('\\') || /[\u0000-\u001f]/.test(p) || p.split('/').slice(1).some(s=>!s.trim() || ['.','..'].includes(s))) throw new Error('文档路径必须以 / 开头，每层非空，不能含 .、..、反斜线或控制字符。');return p;}
 
 export class Service {
-  constructor({config=new Config(),api,confirm,now=Date.now,chatCaptures,runWindows=windows}={}) {this.config=config;this.api=api??new Api(config);this.confirm=confirm??(async(message,{signal}={})=>JSON.parse(await runWindows('confirm',{message},120000,{signal})).accepted===true);this.now=now;this.chats=chatCaptures??new ChatCaptures({now});this.pending=new Map();this.busy=false;this.configuring=false;}
+  constructor({config=new Config(),api,confirm,now=Date.now,chatCaptures,runWindows=windows,knowledgeDir}={}) {this.config=config;this.api=api??new Api(config);this.confirm=confirm??(async(message,{signal}={})=>JSON.parse(await runWindows('confirm',{message},120000,{signal})).accepted===true);this.now=now;this.chats=chatCaptures??new ChatCaptures({now});this.pending=new Map();this.busy=false;this.configuring=false;this.knowledge=new Knowledge({service:this,dir:knowledgeDir??path.join(config.dir??path.join(os.tmpdir(),'SiYuanChatGPT'),'knowledge-jobs')});}
   async settings() {
     const c=await this.config.load();
     return {schema:{type:'object',properties:{apiUrl:{type:'string',title:'思源 API 地址',description:'仅限本机回环地址，默认 http://127.0.0.1:6806'}}},values:{apiUrl:c.apiUrl},layout:[{kind:'group',title:c.tokenCipher?'思源连接（Token 已保存）':'思源连接（Token 未配置）',items:[{kind:'property',property:'apiUrl'},{kind:'tool',tool:'settings.configure',title:'配置地址和 API Token…',description:'在本机密码输入框填写 token，不在聊天中发送。'},{kind:'tool',tool:'siyuan_status',title:'测试连接'}]}]};
   }
   async call(name,a={},signal) {
     const t=TOOLS.find(t=>t.name===name);if(!t)throw new Error('未知工具。');validate(t.inputSchema,a);
+    if(KNOWLEDGE_TOOLS.some(t=>t.name===name))return this.knowledge.call(name,a,signal);
     if(name==='siyuan_capture_current_chat')return this.chats.capture(a,signal);
     if(name==='siyuan_ingest_chat_page')return this.chats.ingest(a);
     if(name==='siyuan_read_captured_chat')return this.chats.read(a);
@@ -271,6 +279,7 @@ export class Service {
       }
       if(signal?.aborted)throw new Error('请求已取消，本次未写入。');
       let assets={};
+      if(p.batch)return await this.knowledge.commitBatch(p,session,signal);
       if(p.images.length) {
         try {
           const uploaded=await this.api.uploadImages(p.images,session,signal);
