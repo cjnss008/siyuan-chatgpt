@@ -1,6 +1,6 @@
 {
   "name": "siyuan-local",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "description": "Windows local SiYuan MCP plugin with user-confirmed writes",
