@@ -69,7 +69,8 @@ export async function readImageSource(source,{signal}={}) {
   if(typeof source!=='string'||!source)throw new Error('历史记录缺少原始图片地址。');
   if(source.startsWith('data:')){const m=source.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,([\s\S]+)$/);if(!m)throw new Error('图片 data URL 无效。');return decodeImage(m[1]).bytes;}
   if(source.startsWith('https:'))return remoteImage(source,signal);
-  const file=source.startsWith('file:')?fileURLToPath(source):source;
+  // Desktop Markdown file links may use /C:/... while Windows files use C:/....
+  const file=source.startsWith('file:')?fileURLToPath(source):source.replace(/^\/([A-Za-z]:[\\/])/,'$1');
   if(!path.isAbsolute(file)||/^[/\\]{2}/.test(file)||/[\x00-\x1f]/.test(file)||file.slice(2).includes(':')||! /\.(png|jpe?g|gif|webp|bmp|tiff?|avif)$/i.test(file))throw new Error('原始图片必须是本机普通图片文件或公开 HTTPS 图片。');
   const handle=await fs.open(file,'r');try{const s=await handle.stat();if(!s.isFile()||s.size>MAX_IMAGE_BYTES)throw new Error('图片不是普通文件或超过 20 MiB。');const bytes=Buffer.alloc(Math.min(s.size+1,MAX_IMAGE_BYTES+1));let count=0;while(count<bytes.length){if(signal?.aborted)throw new Error('请求已取消。');const r=await handle.read(bytes,count,bytes.length-count,null);if(!r.bytesRead)break;count+=r.bytesRead;}if(count>s.size||count>MAX_IMAGE_BYTES)throw new Error('读取期间图片大小变化。');return bytes.subarray(0,count);}finally{await handle.close();}
 }

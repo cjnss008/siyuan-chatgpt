@@ -115,7 +115,7 @@ export async function readCodexThread(threadId,{signal,spawnProcess=spawn,execut
         try{finish(null,fromCodexThread(m.result.thread));}catch(e){finish(e);}
       }
     });
-    send({id:1,method:'initialize',params:{clientInfo:{name:'siyuan_chat_capture',title:'SiYuan chat capture',version:'1.2.0'},capabilities:{}}});
+    send({id:1,method:'initialize',params:{clientInfo:{name:'siyuan_chat_capture',title:'SiYuan chat capture',version:'1.2.1'},capabilities:{}}});
   });
 }
 
