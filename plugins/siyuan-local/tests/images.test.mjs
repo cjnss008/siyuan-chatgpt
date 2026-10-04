@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import {createHash} from 'node:crypto';
-import {hydrateImages,decodeImage,imageReferences,publicAddress,replaceImageLinks,MAX_IMAGE_BYTES} from '../server/images.mjs';
+import {hydrateImages,decodeImage,imageReferences,publicAddress,replaceImageLinks,MAX_IMAGE_BYTES,readImageSource} from '../server/images.mjs';
 import {ChatCaptures,fromCodexThread,validateCapture} from '../server/chat.mjs';
 import {Api,Service} from '../server/core.mjs';
 import {captureChatPage} from '../browser-extension/capture.js';
@@ -20,6 +20,11 @@ function harness(capture,{accept=true,upload,post}={}) {
   return {service,c,events,chats};
 }
 const prepare=h=>h.service.call('siyuan_save_captured_chat',{captureId:h.c.captureId,mode:'original',notebook,path:'/图文'});
+
+test('Windows drive image Markdown links with leading slash resolve to the unchanged original file',{skip:process.platform!=='win32'},async()=>{
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'siyuan-drive-image-')),file=path.join(dir,'原始图片.png');
+  try{await fs.writeFile(file,png);const link='/'+file.replaceAll('\\','/');assert.deepEqual(await readImageSource(link),png);const capture=await hydrateImages(fromCodexThread(thread(link)));assert.equal(capture.images.length,1);assert.equal(capture.images[0].id,digest);assert.equal(capture.messages[1].text,`图片回答\n![图](<${link}>)`);}finally{await fs.rm(dir,{recursive:true,force:true});}
+});
 
 test('Codex image attachment and inline embed deduplicate original bytes into immutable snapshot',async()=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'siyuan-images-')),file=path.join(dir,'原图.png');
