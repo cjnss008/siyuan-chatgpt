@@ -1,8 +1,15 @@
 {
   "manifest_version": 3,
   "name": "思源聊天抓取",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "点击后抓取当前 ChatGPT 网页对话的文字，核对首尾后导出给思源本地插件。",
-  "permissions": ["activeTab", "scripting", "downloads"],
-  "action": {"default_title": "抓取当前 ChatGPT 对话", "default_popup": "popup.html"}
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads"
+  ],
+  "action": {
+    "default_title": "抓取当前 ChatGPT 对话",
+    "default_popup": "popup.html"
+  }
 }
