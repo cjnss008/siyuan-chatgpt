@@ -51,15 +51,30 @@ $form.Add_Shown({
   $cancel.Focus()
 })
 if ($Mode -eq 'confirm') {
-  $text = [Windows.Forms.TextBox]::new()
-  $text.Multiline = $true
+  $form.Text = '思源笔记 · 写入确认'
+  $form.AutoScaleMode = 'Dpi'
+  $form.FormBorderStyle = 'Sizable'
+  $area = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+  $form.Size = [Drawing.Size]::new([Math]::Min(760,$area.Width-40),[Math]::Min(620,$area.Height-40))
+  $form.MinimumSize = [Drawing.Size]::new(400,300)
+  $form.Padding = [Windows.Forms.Padding]::new(16)
+  # The footer owns the buttons, so transcript length and scrolling cannot hide them.
+  $footer = [Windows.Forms.FlowLayoutPanel]::new()
+  $footer.Dock = 'Bottom'
+  $footer.Height = 48
+  $footer.FlowDirection = 'RightToLeft'
+  $footer.WrapContents = $false
+  $cancel.Text = '取消'
+  $save.Text = '确认写入'
+  $footer.Controls.AddRange(@($cancel,$save))
+  $text = [Windows.Forms.RichTextBox]::new()
   $text.ReadOnly = $true
   $text.ScrollBars = 'Both'
   $text.WordWrap = $false
+  $text.DetectUrls = $false
   $text.Text = $inputData.message
-  $text.Location = [Drawing.Point]::new(20,20)
-  $text.Size = [Drawing.Size]::new(700,500)
-  $form.Controls.Add($text)
+  $text.Dock = 'Fill'
+  $form.Controls.AddRange(@($text,$footer))
   $accepted = $form.ShowDialog() -eq [Windows.Forms.DialogResult]::OK
   [Console]::Write((@{accepted=$accepted} | ConvertTo-Json -Compress))
 } else {

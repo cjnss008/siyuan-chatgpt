@@ -26,7 +26,8 @@ export const TOOLS = [
   tool('siyuan_create_document','创建文档','先创建待确认预览，不执行写入；返回的 operationId 交给 siyuan_commit_write。父文档可能自动创建。',object({notebook:idSchema,path:{type:'string',minLength:2,maxLength:1000},markdown},['notebook','path','markdown'])),
   tool('siyuan_append_content','追加内容','先预览在文档或容器末尾插入子块，不执行写入；parentId 必须是文档或容器块。',object({parentId:idSchema,markdown:{...markdown,minLength:1}},['parentId','markdown'])),
   tool('siyuan_update_block','更新块','先预览替换整个块（容器含子块）；expectedHash 可防止覆盖已变化的内容。',object({id:idSchema,markdown,expectedHash:{type:'string',pattern:'^[a-f0-9]{64}$'}},['id','markdown'])),
-  tool('siyuan_commit_write','确认并执行写入','触发用户确认窗口；只有用户在窗口确认才执行。预览有效期 10 分钟，单次使用；异常结果不自动重试。',object({operationId:{type:'string',format:'uuid'}},['operationId']),writeHint),
+  tool('siyuan_commit_write','确认并执行写入','默认打开独立 Windows 窗口，全文滚动且按钮固定。confirmationUi=host 使用简短备用表单。只有用户确认才写入；异常不自动重试。',object({operationId:{type:'string',format:'uuid'},confirmationUi:{type:'string',enum:['native','host']}},['operationId']),writeHint),
+  tool('siyuan_read_write_preview','读取完整写入预览','分页读取待确认预览，包含原内容和待写入全文。nextOffset 非空时继续；不写入。',object({operationId:{type:'string',format:'uuid'},offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:100000}},['operationId'])),
   tool('siyuan_cancel_write','取消待确认写入','移除预览，不写入思源。',object({operationId:{type:'string',format:'uuid'}},['operationId']),{...writeHint,destructiveHint:false,idempotentHint:true}),
   tool('siyuan_configure','打开思源连接配置','通过插件本地进程打开 Windows 配置窗口；API 地址下方是 Token 密码框。不要在聊天中发送 Token。取消不会保存。',object(),{...writeHint,destructiveHint:false}),
   tool('siyuan_capture_current_chat','抓取当前聊天记录','Codex：使用可信的当前 threadId 读取完整持久化历史，不能猜测最近聊天。网页：导入当前 ChatGPT 页面配套扩展导出的 JSON；不读取其他窗口。返回不可变快照，不写入思源。',object({source:{type:'string',enum:['codex','chatgpt-web']},threadId:{type:'string',minLength:8,maxLength:100},captureFile:{type:'string',maxLength:2000}},['source'])),
@@ -79,7 +80,7 @@ export function windows(mode,data,timeout=300000,{signal,spawnProcess=spawn,plat
     let out='',err='',settled=false;
     const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',abort);error?reject(error):resolve(value);};
     const abort=()=>{child.kill();finish(new Error('请求已取消。'));};
-    const timer=setTimeout(()=>{child.kill();finish(new Error(interactive?'本机窗口已超时；请通过插件配置入口重试，未批准保存或写入。':'Windows 加密操作超时。'));},timeout);
+    const timer=setTimeout(()=>{child.kill();finish(new Error(mode==='confirm'?'本机确认窗口已超时，本次未写入。请重新准备预览。':interactive?'本机窗口已超时；请通过插件配置入口重试，未批准保存或写入。':'Windows 加密操作超时。'));},timeout);
     signal?.addEventListener('abort',abort,{once:true});
     child.stdout.setEncoding('utf8');child.stdout.on('data',d=>out+=d);
     child.stderr.on('data',d=>err+=d);
@@ -144,7 +145,7 @@ function kramdown(data) {if(typeof data?.kramdown!=='string')throw new Error('�
 function documentPath(p) {if(!p.startsWith('/') || p.endsWith('/') || p.includes('\\') || /[\u0000-\u001f]/.test(p) || p.split('/').slice(1).some(s=>!s.trim() || ['.','..'].includes(s))) throw new Error('文档路径必须以 / 开头，每层非空，不能含 .、..、反斜线或控制字符。');return p;}
 
 export class Service {
-  constructor({config=new Config(),api,confirm,now=Date.now,chatCaptures}={}) {this.config=config;this.api=api??new Api(config);this.confirm=confirm??(async message=>JSON.parse(await windows('confirm',{message})).accepted);this.now=now;this.chats=chatCaptures??new ChatCaptures({now});this.pending=new Map();this.busy=false;this.configuring=false;}
+  constructor({config=new Config(),api,confirm,now=Date.now,chatCaptures,runWindows=windows}={}) {this.config=config;this.api=api??new Api(config);this.confirm=confirm??(async(message,{signal}={})=>JSON.parse(await runWindows('confirm',{message},120000,{signal})).accepted===true);this.now=now;this.chats=chatCaptures??new ChatCaptures({now});this.pending=new Map();this.busy=false;this.configuring=false;}
   async settings() {
     const c=await this.config.load();
     return {schema:{type:'object',properties:{apiUrl:{type:'string',title:'思源 API 地址',description:'仅限本机回环地址，默认 http://127.0.0.1:6806'}}},values:{apiUrl:c.apiUrl},layout:[{kind:'group',title:c.tokenCipher?'思源连接（Token 已保存）':'思源连接（Token 未配置）',items:[{kind:'property',property:'apiUrl'},{kind:'tool',tool:'settings.configure',title:'配置地址和 API Token…',description:'在本机密码输入框填写 token，不在聊天中发送。'},{kind:'tool',tool:'siyuan_status',title:'测试连接'}]}]};
@@ -187,7 +188,11 @@ export class Service {
     if(name==='siyuan_read_block') {const d=await this.api.post('/api/block/getBlockKramdown',{id:a.id});return {id:a.id,format:'kramdown',...page(kramdown(d),a),url:`siyuan://blocks/${a.id}`};}
     if(name==='siyuan_read_document') {const d=await this.api.post('/api/export/exportMdContent',{id:a.id});if(typeof d?.content!=='string')throw new Error('思源未返回文档 Markdown。');return {id:a.id,hPath:d.hPath,format:'markdown',...page(d.content,a),url:`siyuan://blocks/${a.id}`};}
     if(name==='siyuan_cancel_write') {return {cancelled:this.pending.delete(a.operationId)};}
-    if(name==='siyuan_commit_write')return this.commit(a.operationId,signal);
+    if(name==='siyuan_read_write_preview') {
+      const p=this.pending.get(a.operationId);if(!p||p.expiresAt<=this.now())throw new Error('预览不存在、已使用或已过期，请重新准备。');
+      return {operationId:a.operationId,...page(p.message,a)};
+    }
+    if(name==='siyuan_commit_write')return this.commit(a.operationId,signal,a.confirmationUi??'native');
     return this.prepare(name,a);
   }
   async prepare(name,a) {
@@ -218,10 +223,14 @@ export class Service {
     const operationId=randomUUID(),expiresAt=this.now()+600000;
     const action={'siyuan_create_document':'创建文档','siyuan_append_content':'追加内容','siyuan_update_block':'替换块（容器的子块也可能被替换）'}[name];
     const message=`思源笔记写入确认\n操作：${action}\nAPI：${session.apiUrl}\n${target}\n\n${before!==null?`原内容（完整）：\n${before}\n\n`:''}待写入内容（完整）：\n${a.markdown}\n\n仅点击 Confirm 或确认复选框才执行；取消不会写入。`;
-    this.pending.set(operationId,{operationId,expiresAt,connection,endpoint,body,before,message});
-    return {status:'awaiting_confirmation',operationId,expiresAt:new Date(expiresAt).toISOString(),preview:message};
+    const boundedTarget=target.length>1200?target.slice(0,850)+'\n…（完整路径见独立窗口或完整预览）…\n'+target.slice(-300):target;
+    const excerpt=a.markdown.length>240?a.markdown.slice(0,120)+'\n…（正文省略）…\n'+a.markdown.slice(-120):a.markdown;
+    const summary=`思源笔记写入确认\n操作：${action}\nAPI：${session.apiUrl}\n${boundedTarget}\n\n待写入：${a.markdown.length} 字符\nSHA-256：${hash(a.markdown)}\n${before!==null?'将替换/追加到已预览的目标内容；完整原内容见预览。\n':''}\n正文节选：\n${excerpt}\n\n独立窗口提供可滚动全文，按钮固定在底部。宿主备用表单只显示摘要；完整内容可由 siyuan_read_write_preview 分页核对。仅用户确认才写入；取消不会写入。`;
+    this.pending.set(operationId,{operationId,expiresAt,connection,endpoint,body,before,message,summary});
+    const previewTruncated=message.length>4000;
+    return {status:'awaiting_confirmation',operationId,expiresAt:new Date(expiresAt).toISOString(),preview:previewTruncated?summary:message,previewTruncated,previewCharacters:message.length,contentCharacters:a.markdown.length,contentHash:hash(a.markdown),confirmationUi:'native',fullPreviewTool:'siyuan_read_write_preview'};
   }
-  async commit(id,signal) {
+  async commit(id,signal,ui='native') {
     const p=this.pending.get(id);if(!p || p.expiresAt<=this.now()){this.pending.delete(id);throw new Error('预览不存在、已使用或已过期，请重新准备。');}
     if(this.busy)throw new Error('已有写入正在等待用户确认，请稍后再试。');
     this.busy=true;this.pending.delete(id); // Single-use even if cancelled or the network result is uncertain.
@@ -229,7 +238,7 @@ export class Service {
       const session=await this.api.session();
       if(hash(JSON.stringify({apiUrl:session.apiUrl,token:session.token}))!==p.connection)throw new Error('连接设置已变化，请重新准备预览。');
       if(signal?.aborted)throw new Error('请求已取消，本次未写入。');
-      if(!await this.confirm(p.message))return {status:'cancelled',written:false};
+      if(await this.confirm(p.message,{ui,summary:p.summary,signal})!==true)return {status:'cancelled',written:false};
       if(signal?.aborted)throw new Error('请求已取消，本次未写入。');
       if(p.expiresAt<=this.now())throw new Error('确认时预览已过期，请重新准备。');
       const latest=await this.api.session();

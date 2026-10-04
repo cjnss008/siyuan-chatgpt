@@ -1,31 +1,18 @@
 import readline from 'node:readline';
 import {Service, TOOLS} from './core.mjs';
+import {HostRequests, createConfirmation} from './confirmation.mjs';
 
 const versions=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
 const settings={readTool:'settings.read',updateTool:'settings.update'};
 const caps={tools:{listChanged:false},experimental:{'openai/settings':settings},extensions:{'openai/settings':settings}};
-const info={name:'siyuan-local',version:'1.1.0'};
-let clientCaps={},initialized=false,seq=0;
-const outbound=new Map();
+const info={name:'siyuan-local',version:'1.1.1'};
+let clientCaps={},initialized=false;
 const active=new Map();
 function send(value) {process.stdout.write(JSON.stringify({jsonrpc:'2.0',...value})+'\n');}
-function request(method,params) {
-  const id=`siyuan-${++seq}`;
-  return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{outbound.delete(id);reject(new Error('用户确认超时，本次未写入。'));},300000);
-    outbound.set(id,{resolve,reject,timer});send({id,method,params});
-  });
-}
+const outbound=new HostRequests(send);
 const service=new Service();
 const nativeConfirm=service.confirm;
-service.confirm=async message=>{
-  const el=clientCaps.elicitation;
-  if(el && (el.form || Object.keys(el).length===0)) {
-    const r=await request('elicitation/create',{mode:'form',message,requestedSchema:{type:'object',properties:{confirm:{type:'boolean',title:'我已核对目标与完整内容，确认写入',default:false}},required:['confirm']}});
-    return r.action==='accept' && r.content?.confirm===true;
-  }
-  return nativeConfirm(message);
-};
+service.confirm=createConfirmation({nativeConfirm,request:outbound.request.bind(outbound),getCapabilities:()=>clientCaps});
 async function handle(req) {
   if(req.method==='initialize') {
     clientCaps=req.params?.capabilities??{};initialized=true;
@@ -50,9 +37,9 @@ lines.on('line',line=>{
   let req;
   try {if(Buffer.byteLength(line)>2*1024*1024)throw new Error();req=JSON.parse(line);}catch{send({id:null,error:{code:-32700,message:'无效 JSON 或消息过大。'}});return;}
   if(req?.jsonrpc!=='2.0' || (!('method' in req) && !('id' in req))) {send({id:req?.id??null,error:{code:-32600,message:'无效 JSON-RPC 请求。'}});return;}
-  if(!req.method && outbound.has(req.id)) {const p=outbound.get(req.id);outbound.delete(req.id);clearTimeout(p.timer);if(req.error)p.reject(new Error('确认界面失败，本次未写入。'));else p.resolve(req.result);return;}
+  if(!req.method) {outbound.settle(req);return;}
   if(req.method==='notifications/cancelled') {
-    const task=active.get(req.params?.requestId);if(task) {task.cancelled=true;task.controller.abort();for(const [id,p]of outbound){clearTimeout(p.timer);p.reject(new Error('请求已取消，本次未写入。'));outbound.delete(id);}}
+    const task=active.get(req.params?.requestId);if(task) {task.cancelled=true;task.controller.abort();}
     return;
   }
   if(!('id' in req))return;
@@ -61,6 +48,7 @@ lines.on('line',line=>{
   // Do not serialize: an elicitation response must be received during tools/call.
   handle(req).then(result=>send({id:req.id,result})).catch(e=>send({id:req.id,error:{code:e.code??-32603,message:e.message}})).finally(()=>active.delete(req.id));
 });
-lines.on('close',()=>{for(const p of outbound.values()){clearTimeout(p.timer);p.reject(new Error('连接关闭，本次未写入。'));}outbound.clear();});
-process.on('SIGINT',()=>process.exit(0));
-process.on('SIGTERM',()=>process.exit(0));
+lines.on('close',()=>{for(const task of active.values())task.controller.abort();outbound.close();});
+const shutdown=()=>{for(const task of active.values())task.controller.abort();outbound.close();process.exit(0);};
+process.on('SIGINT',shutdown);
+process.on('SIGTERM',shutdown);
