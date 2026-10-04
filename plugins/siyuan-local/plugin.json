@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "siyuan-local",
-  "version": "1.1.2",
-  "description": "在 Windows 本机连接思源笔记，搜索与读取笔记，抓取当前聊天文字并确认后保存原文或摘要。",
+  "version": "1.2.0",
+  "description": "在 Windows 本机连接思源笔记，抓取当前聊天文字和图片，确认后保存原文或摘要。",
   "author": {
     "name": "SiYuan Local Plugin"
   },
@@ -20,7 +20,7 @@
       "interface": {
         "displayName": "思源笔记 · 本地连接",
         "shortDescription": "本机笔记连接与聊天归档",
-        "longDescription": "通过 Windows 本地 MCP 服务访问思源 HTTP API。支持搜索、读取和确认写入笔记；读取当前 Codex 聊天的完整持久化文字，或导入配套 Edge/Chrome 扩展抓取的当前 ChatGPT 网页文字，保存原文或总结摘要。原文直接使用不可变快照。Token 由本机密码窗口配置，使用 Windows DPAPI 加密保存。需要本地桌面宿主、Node.js 22+ 和运行中的思源；网页抓取需安装配套浏览器扩展并核对首尾。",
+        "longDescription": "通过 Windows 本地 MCP 服务访问思源 HTTP API。支持搜索、读取和确认写入笔记；抓取当前 Codex 聊天或导入配套 Edge/Chrome 扩展抓取的当前 ChatGPT 网页，保存原文或摘要及图片文件。图片按 SHA-256 去重，确认后上传到思源资源库并替换引用；缺失图片时停止完整保存。Token 使用本机密码窗口配置和 Windows DPAPI 加密。需要 Windows 本地桌面宿主、Node.js 22+ 和运行中的思源；网页需安装配套扩展并核对首尾，只能保存页面可下载的图片版本。",
         "developerName": "SiYuan Local Plugin",
         "category": "Productivity",
         "capabilities": [
