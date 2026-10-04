@@ -78,3 +78,9 @@ Edge/Chrome 中的 ChatGPT 网页需要安装 [配套浏览器扩展](browser-ex
 运行 `npm test` 或 `node --test tests/*.test.mjs`。测试使用本机模拟 API 和临时配置，不修改用户真实笔记。`Configure.cmd` 与结构化设置使用同一套配置逻辑。环境变量 `SIYUAN_PLUGIN_CONFIG_DIR` 仅用于隔离开发测试配置；用户无需设置。
 
 参考：[思源公开 API](https://github.com/siyuan-note/siyuan/blob/master/docs/API.zh-CN.md)、[MCP 协议](https://modelcontextprotocol.io/specification/2025-11-25)、[OpenAI 结构化设置](https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#structured-settings)、[Agent Plugins](https://agent-plugins.org/)。
+
+## 1.3.0 知识地图
+
+在聊天中请求“盘点指定笔记本，建立带原文依据的知识地图”，按清单、试点、建图规则、分批扩展、问题验证五步执行。新增 7 个工具：文档清单、入链出链查询、持久知识任务、任务分页、带版本的源码分页、证据核对与分析记录、批量新文档预览。进度仅保存在本机 `knowledge-jobs/`；语义分析由对话中的 AI 执行，不会安装后自动精读全库。程序取得全文、正文索引和观点分析分别记录。
+
+批量新建最多 50 篇、合计 500000 字符。用户一次原生确认后依次创建，既有路径停止；创建后回读路径和源码。批次不是事务，部分成功不删除，未知结果先核对，不自动重试。原文不会被知识地图流程改写。引用使用思源原生块引用；普通 Markdown 导出可能展开被引内容，分析与核验优先用 Kramdown。
