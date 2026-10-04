@@ -3,6 +3,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import {spawn} from 'node:child_process';
 import {randomUUID, createHash} from 'node:crypto';
+import {hydrateImages, normalizeImages, imagePlaceholder, imageReferences, MAX_CAPTURE_FILE_BYTES} from './images.mjs';
 
 export const MAX_CHAT_BYTES=8*1024*1024;
 const sha=text=>createHash('sha256').update(text).digest('hex');
@@ -18,15 +19,19 @@ export function fromCodexThread(thread,{capturedAt=new Date().toISOString()}={})
       if(item.type==='agentMessage') {
         if(typeof item.text!=='string')throw new Error('助手消息不是完整文本。');
         messages.push({id:item.id??`${turn.id}-${messages.length}`,role:'assistant',text:item.text,phase:item.phase??null});
+      } else if(item.type==='imageGeneration'&&!item.failure&&(item.savedPath||item.result)) {
+        const result=item.result??'';
+        const source=item.savedPath??(/^(data:image\/|https:)/.test(result)?result:`data:image/png;base64,${result}`);
+        messages.push({id:item.id??`${turn.id}-${messages.length}`,role:'assistant',text:'',attachments:[{type:'image',name:'生成的图片',source}]});
       } else if(item.type==='userMessage') {
         if(!Array.isArray(item.content))throw new Error('用户消息未加载。');
         const text=[],attachments=[];
         for(const part of item.content) {
           if(part.type==='text'&&typeof part.text==='string')text.push(part.text);
-          else attachments.push({type:part.type??'unknown',name:part.path?path.basename(part.path):part.name??''});
+          else attachments.push({type:part.type??'unknown',name:part.path?path.basename(part.path):part.name??'',...(['image','localImage'].includes(part.type)?{source:part.path??part.url??''}:{})});
         }
         messages.push({id:item.id??`${turn.id}-${messages.length}`,role:'user',text:text.join('\n'),attachments});
-        if(attachments.length)warnings.push('包含附件；仅保存附件说明，不复制附件文件。');
+        if(attachments.some(a=>!['image','localImage'].includes(a.type)))warnings.push('非图片附件仅保存说明，不复制文件。');
       }
     }
     if(turn.status==='inProgress')warnings.push('当前回复尚未完成；快照只包含抓取时已经持久化的内容。');
@@ -44,20 +49,28 @@ export function validateCapture(value) {
   const messages=value.messages.map(m=>{
     if(!m||typeof m.id!=='string'||!m.id||ids.has(m.id)||!['user','assistant'].includes(m.role)||typeof m.text!=='string')throw new Error('聊天消息缺失、重复或格式错误。');
     ids.add(m.id);
-    const attachments=(m.attachments??[]).map(a=>{if(typeof a?.type!=='string'||typeof a?.name!=='string')throw new Error('附件说明无效。');return {type:a.type,name:a.name};});
-    return {id:m.id,role:m.role,text:m.text,phase:typeof m.phase==='string'?m.phase:null,attachments};
+    const attachments=(m.attachments??[]).map(a=>{if(typeof a?.type!=='string'||typeof a?.name!=='string')throw new Error('附件说明无效。');return {type:a.type,name:a.name,...(value.source==='codex'&&typeof a.source==='string'?{source:a.source}:{}),...(typeof a.imageId==='string'?{imageId:a.imageId}:{})};});
+    const references=(m.imageReferences??[]).map(r=>{if(!Number.isSafeInteger(r.start)||!Number.isSafeInteger(r.end)||r.start<0||r.end<=r.start||r.end>m.text.length||typeof r.imageId!=='string')throw new Error('图片正文引用无效。');const original=imageReferences(m.text).find(x=>x.start===r.start&&x.end===r.end);if(!original)throw new Error('图片引用与原文不一致。');return {...original,imageId:r.imageId};});
+    return {id:m.id,role:m.role,text:m.text,phase:typeof m.phase==='string'?m.phase:null,attachments,imageReferences:references};
   });
   const result={schema:value.schema,source:value.source,conversationId:value.conversationId,title:value.title,capturedAt:value.capturedAt,coverage:value.coverage,messages,warnings:(value.warnings??[]).filter(w=>typeof w==='string')};
-  if(Buffer.byteLength(JSON.stringify(result))>MAX_CHAT_BYTES)throw new Error('聊天记录超过 8 MiB；未截断，请分段导出。');
+  const textSize=JSON.stringify({...result,messages:messages.map(m=>({...m,attachments:m.attachments.map(({source,...a})=>a)}))});
+  if(Buffer.byteLength(textSize)>MAX_CHAT_BYTES)throw new Error('聊天文字超过 8 MiB；未截断，请分段导出。');
+  result.images=normalizeImages(value);result.imageCoverage=value.imageCoverage==='original-files'?'original-files':'not-captured';
+  const imageIds=new Set(result.images.map(i=>i.id));
+  for(const m of messages)for(const ref of [...m.attachments,...m.imageReferences])if(ref.imageId&&!imageIds.has(ref.imageId))throw new Error('消息引用的图片缺失。');
   if(result.coverage==='page-text-unverified')result.warnings.push('网页记录未核对首尾，不能称为完整记录。');
   return result;
 }
 
 export function renderChat(capture) {
   const label=capture.source==='codex'?'Codex':'ChatGPT';
-  const header=`# ${capture.title.replace(/[\r\n]/g,' ')}\n\n来源：${label}\n聊天 ID：${capture.conversationId}\n抓取时间：${capture.capturedAt}\n范围：用户与助手的文字消息\n`;
+  const header=`# ${capture.title.replace(/[\r\n]/g,' ')}\n\n来源：${label}\n聊天 ID：${capture.conversationId}\n抓取时间：${capture.capturedAt}\n范围：用户与助手的文字消息${capture.images?.length&&capture.imageCoverage==='original-files'?'及图片原文件':''}\n`;
   const warnings=capture.warnings.length?'\n'+capture.warnings.map(w=>`> ${w.replace(/[\r\n]/g,' ')}`).join('\n')+'\n':'';
-  return header+warnings+capture.messages.map((m,i)=>`\n## ${i+1}. ${m.role==='user'?'用户':label}\n\n${m.text}${m.attachments.length?'\n\n'+m.attachments.map(a=>`[附件：${a.type} ${a.name}]`).join('\n'):''}\n`).join('');
+  return header+warnings+capture.messages.map((m,i)=>{
+    let text=m.text;for(const r of [...m.imageReferences].sort((a,b)=>b.start-a.start))text=text.slice(0,r.start)+(r.whole?`![${r.alt}](${imagePlaceholder(r.imageId)})`:imagePlaceholder(r.imageId))+text.slice(r.end);
+    return `\n## ${i+1}. ${m.role==='user'?'用户':label}\n\n${text}${m.attachments.length?'\n\n'+m.attachments.map(a=>a.imageId?`![${a.name.replace(/[\[\]\\\r\n]/g,' ')}](${imagePlaceholder(a.imageId)})`:`[附件：${a.type} ${a.name}]`).join('\n'):''}\n`;
+  }).join('');
 }
 
 export async function findCodexExecutable() {
@@ -102,7 +115,7 @@ export async function readCodexThread(threadId,{signal,spawnProcess=spawn,execut
         try{finish(null,fromCodexThread(m.result.thread));}catch(e){finish(e);}
       }
     });
-    send({id:1,method:'initialize',params:{clientInfo:{name:'siyuan_chat_capture',title:'SiYuan chat capture',version:'1.1.0'},capabilities:{}}});
+    send({id:1,method:'initialize',params:{clientInfo:{name:'siyuan_chat_capture',title:'SiYuan chat capture',version:'1.2.0'},capabilities:{}}});
   });
 }
 
@@ -111,21 +124,21 @@ export class ChatCaptures {
   prune(){for(const map of [this.snapshots,this.pages])for(const [id,v]of map)if(v.expires<=this.now())map.delete(id);}
   store(value){this.prune();if(this.snapshots.size>=10)throw new Error('聊天快照过多；请重新加载插件清理。');const capture=validateCapture(value),markdown=renderChat(capture),captureId=randomUUID();this.snapshots.set(captureId,{capture,markdown,hash:sha(markdown),expires:this.now()+3600000});return this.describe(captureId);}
   get(id){this.prune();const v=this.snapshots.get(id);if(!v)throw new Error('抓取快照不存在或已过期，请重新抓取。');return v;}
-  describe(id){const v=this.get(id);return {captureId:id,source:v.capture.source,conversationId:v.capture.conversationId,title:v.capture.title,messageCount:v.capture.messages.length,totalCharacters:v.markdown.length,hash:v.hash,coverage:v.capture.coverage,warnings:v.capture.warnings};}
+  describe(id){const v=this.get(id);return {captureId:id,source:v.capture.source,conversationId:v.capture.conversationId,title:v.capture.title,messageCount:v.capture.messages.length,totalCharacters:v.markdown.length,hash:v.hash,coverage:v.capture.coverage,imageCoverage:v.capture.imageCoverage,imageCount:v.capture.images.filter(i=>!i.error).length,imageBytes:v.capture.images.reduce((n,i)=>n+(i.bytes??0),0),missingImages:v.capture.images.filter(i=>i.error).map(({name,error})=>({name,error})),warnings:v.capture.warnings};}
   async capture(a,signal) {
-    if(a.source==='codex') {if(a.captureFile)throw new Error('Codex 抓取不接收文件路径。');const id=a.threadId;if(!id)throw new Error('需要明确的当前聊天 ID；请通过当前窗口的可信信息取得 threadId，不能使用共享服务启动时的旧 ID。');return this.store(await this.readThread(id,{signal}));}
+    if(a.source==='codex') {if(a.captureFile)throw new Error('Codex 抓取不接收文件路径。');const id=a.threadId;if(!id)throw new Error('需要明确的当前聊天 ID；请通过当前窗口的可信信息取得 threadId，不能使用共享服务启动时的旧 ID。');return this.store(await hydrateImages(await this.readThread(id,{signal}),{signal}));}
     if(a.threadId)throw new Error('网页抓取不接收 Codex threadId。');
     if(!a.captureFile||!path.isAbsolute(a.captureFile)||path.extname(a.captureFile).toLowerCase()!=='.json')throw new Error('请先在当前 ChatGPT 网页点击配套扩展，再提供它导出的 JSON 文件绝对路径。');
     let raw;
     try {
       const handle=await fs.open(a.captureFile,'r');
       try {
-        const stat=await handle.stat();if(!stat.isFile()||stat.size>MAX_CHAT_BYTES)throw new Error();
-        const bytes=Buffer.alloc(MAX_CHAT_BYTES+1);let count=0;
+        const stat=await handle.stat();if(!stat.isFile()||stat.size>MAX_CAPTURE_FILE_BYTES)throw new Error();
+        const bytes=Buffer.alloc(Math.min(stat.size+1,MAX_CAPTURE_FILE_BYTES+1));let count=0;
         while(count<bytes.length){const result=await handle.read(bytes,count,bytes.length-count,null);if(!result.bytesRead)break;count+=result.bytesRead;}
-        if(count>MAX_CHAT_BYTES)throw new Error();raw=bytes.subarray(0,count).toString('utf8');
+        if(count>stat.size||count>MAX_CAPTURE_FILE_BYTES)throw new Error();raw=bytes.subarray(0,count).toString('utf8');
       }finally{await handle.close();}
-    }catch{throw new Error('抓取文件不可读、不是普通文件或超过 8 MiB。');}
+    }catch{throw new Error('抓取文件不可读、不是普通文件或超过 144 MiB。');}
     let value;try{value=JSON.parse(raw);}catch{throw new Error('抓取文件不是有效 JSON。');}
     if(value.source!=='chatgpt-web')throw new Error('文件不是网页抓取记录。');
     if(signal?.aborted)throw new Error('请求已取消。');return this.store(value);

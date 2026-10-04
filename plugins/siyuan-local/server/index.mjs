@@ -5,7 +5,7 @@ import {HostRequests, createConfirmation} from './confirmation.mjs';
 const versions=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
 const settings={readTool:'settings.read',updateTool:'settings.update'};
 const caps={tools:{listChanged:false},experimental:{'openai/settings':settings},extensions:{'openai/settings':settings}};
-const info={name:'siyuan-local',version:'1.1.2'};
+const info={name:'siyuan-local',version:'1.2.0'};
 let clientCaps={},initialized=false;
 const active=new Map();
 function send(value) {process.stdout.write(JSON.stringify({jsonrpc:'2.0',...value})+'\n');}
@@ -25,7 +25,7 @@ async function handle(req) {
   if(req.method==='tools/call') {
     try {
       const data=await service.call(req.params?.name,req.params?.arguments??{},active.get(req.id)?.controller.signal);
-      if(active.get(req.id)?.cancelled && !data.written)return {content:[{type:'text',text:'请求已取消。'}],isError:true};
+      if(active.get(req.id)?.cancelled && !data.written && !['asset_upload_incomplete','document_write_uncertain'].includes(data.status))return {content:[{type:'text',text:'请求已取消。'}],isError:true};
       return {content:[{type:'text',text:JSON.stringify(data)}],structuredContent:data};
     } catch(e) {return {content:[{type:'text',text:e.message}],isError:true};}
   }

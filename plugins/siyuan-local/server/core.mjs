@@ -4,7 +4,8 @@ import os from 'node:os';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {randomUUID, createHash} from 'node:crypto';
-import {ChatCaptures, MAX_CHAT_BYTES} from './chat.mjs';
+import {ChatCaptures, MAX_CHAT_BYTES, renderChat} from './chat.mjs';
+import {hydrateImages, imageMarkdown, replaceImageLinks} from './images.mjs';
 
 const WINDOWS = fileURLToPath(new URL('./windows.ps1', import.meta.url));
 const ID = '^\\d{14}-[a-z0-9]{7}$';
@@ -33,7 +34,7 @@ export const TOOLS = [
   tool('siyuan_capture_current_chat','抓取当前聊天记录','Codex：使用可信的当前 threadId 读取完整持久化历史，不能猜测最近聊天。网页：导入当前 ChatGPT 页面配套扩展导出的 JSON；不读取其他窗口。返回不可变快照，不写入思源。',object({source:{type:'string',enum:['codex','chatgpt-web']},threadId:{type:'string',minLength:8,maxLength:100},captureFile:{type:'string',maxLength:2000}},['source'])),
   tool('siyuan_ingest_chat_page','导入宿主聊天原始分页','Codex CLI 不可用时，将 read_thread 当前聊天的原始响应直接传入 pageJson，不能重写消息。第一页不传 captureId/requestCursor；之后使用返回游标，直到 ready=true。不是模型总结。',object({pageJson:{type:'string',maxLength:1500000},captureId:{type:'string',format:'uuid'},requestCursor:{type:'string',maxLength:20000}},['pageJson'])),
   tool('siyuan_read_captured_chat','读取抓取快照','分页读取抓取后的完整文字快照用于检查或总结；hash 对应完整 Markdown。nextOffset 非空时继续读取。',object({captureId:{type:'string',format:'uuid'},offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:100000}},['captureId'])),
-  tool('siyuan_save_captured_chat','保存聊天原文或摘要预览','original 直接用不可变快照生成思源预览，不经模型重写。summary 用读完快照后生成的 summaryMarkdown。新建传 notebook/path，追加传 parentId；必须再调用 siyuan_commit_write 由用户确认。',object({captureId:{type:'string',format:'uuid'},mode:{type:'string',enum:['original','summary']},summaryMarkdown:{type:'string',minLength:1,maxLength:100000},notebook:idSchema,path:{type:'string',minLength:2,maxLength:1000},parentId:idSchema},['captureId','mode']))
+  tool('siyuan_save_captured_chat','保存聊天原文或摘要预览','original 使用不可变快照；summary 使用 summaryMarkdown，并附原聊天图片。默认 includeImages=true：确认后上传原图到思源 assets 并替换引用，任一图片缺失时停止完整保存。用户明确只保存文字才设 false。新建传 notebook/path，追加传 parentId；必须再调用 siyuan_commit_write 由用户确认。',object({captureId:{type:'string',format:'uuid'},mode:{type:'string',enum:['original','summary']},includeImages:{type:'boolean'},summaryMarkdown:{type:'string',minLength:1,maxLength:100000},notebook:idSchema,path:{type:'string',minLength:2,maxLength:1000},parentId:idSchema},['captureId','mode']))
 ];
 TOOLS[0].outputSchema = object({schema:{type:'object'},values:{type:'object'},layout:{type:'array',items:{type:'object'}}},['schema','values']);
 TOOLS[1].outputSchema = object({values:{type:'object'}},['values']);
@@ -55,6 +56,7 @@ export function validate(schema, value, label='arguments') {
     if (schema.maxLength!==undefined && value.length>schema.maxLength) bad();
     if (schema.pattern && !new RegExp(schema.pattern).test(value)) bad();
     if (schema.format==='uuid' && !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value)) bad();
+  } else if (schema.type==='boolean') {if(typeof value!=='boolean')bad();
   } else if (schema.type==='integer') {
     if (!Number.isSafeInteger(value)) bad();
     if (schema.minimum!==undefined && value<schema.minimum) bad();
@@ -121,11 +123,20 @@ export class Api {
   constructor(config) {this.config=config;}
   async session() {return this.config.session();}
   async post(endpoint,body={},session) {
+    return this.request(endpoint,JSON.stringify(body),session,undefined,15000,{'Content-Type':'application/json'});
+  }
+  async uploadImages(images,session,signal) {
+    const form=new FormData();form.append('assetsDirPath','/assets/');
+    for(const i of images)form.append('file[]',new Blob([Buffer.from(i.base64,'base64')],{type:i.mime}),i.name);
+    return this.request('/api/asset/upload',form,session,signal,60000,{});
+  }
+  async request(endpoint,body,session,signal,timeoutMs,headers) {
     session??=await this.session();
     const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),15000);
+    const abort=()=>controller.abort();if(signal?.aborted)abort();signal?.addEventListener('abort',abort,{once:true});
+    const timer=setTimeout(abort,timeoutMs);
     try {
-      const r=await fetch(session.apiUrl+endpoint,{method:'POST',headers:{'Content-Type':'application/json',...(session.token?{Authorization:`Token ${session.token}`}:{})},body:JSON.stringify(body),redirect:'error',signal:controller.signal});
+      const r=await fetch(normalizeUrl(session.apiUrl)+endpoint,{method:'POST',headers:{...headers,...(session.token?{Authorization:`Token ${session.token}`}:{})},body,redirect:'error',signal:controller.signal});
       if (!r.ok) throw new Error(r.status===401||r.status===403?'鉴权失败，请检查 API token。':`思源返回 HTTP ${r.status}。`);
       const reader=r.body.getReader();let chunks=[],size=0;
       while (true) {const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>16*1024*1024){controller.abort();throw new Error('思源响应超过 16 MiB 限制。');}chunks.push(value);}
@@ -135,7 +146,7 @@ export class Api {
     } catch(e) {
       if (e.name==='AbortError' || e.name==='TypeError') throw new Error('无法连接思源或请求超时；请检查地址、token，并保持思源运行。写请求可能已生效，请先读取核对，勿直接重试。');
       throw e;
-    } finally {clearTimeout(timer);}
+    } finally {clearTimeout(timer);signal?.removeEventListener('abort',abort);}
   }
 }
 const hash=text=>createHash('sha256').update(text).digest('hex');
@@ -156,15 +167,25 @@ export class Service {
     if(name==='siyuan_ingest_chat_page')return this.chats.ingest(a);
     if(name==='siyuan_read_captured_chat')return this.chats.read(a);
     if(name==='siyuan_save_captured_chat') {
-      const snapshot=this.chats.get(a.captureId);
+      let snapshot=this.chats.get(a.captureId);
       if(snapshot.capture.coverage==='page-text-unverified')throw new Error('网页记录尚未核对首尾，请在扩展中核对后重新导出。');
       if(a.mode==='original'&&a.summaryMarkdown!==undefined)throw new Error('保存原文不接收模型改写内容。');
       if(a.mode==='summary'&&!a.summaryMarkdown)throw new Error('摘要模式需要 summaryMarkdown。');
       if(a.parentId?(a.notebook!==undefined||a.path!==undefined):(!a.notebook||!a.path))throw new Error('请明确新建 notebook/path 或追加 parentId，两者不能混用。');
-      const text=a.mode==='original'?snapshot.markdown:`# ${snapshot.capture.title.replace(/[\r\n]/g,' ')}（摘要）\n\n来源：${snapshot.capture.source}\n聊天 ID：${snapshot.capture.conversationId}\n原文 SHA-256：${snapshot.hash}\n抓取时间：${snapshot.capture.capturedAt}\n\n${snapshot.capture.warnings.map(w=>'> '+w).join('\n')}\n\n${a.summaryMarkdown}`;
+      const includeImages=a.includeImages!==false;
+      if(includeImages&&snapshot.capture.imageCoverage!=='original-files') {
+        if(snapshot.capture.source==='codex') {
+          const hydrated=await hydrateImages(snapshot.capture,{signal});const markdown=renderChat(hydrated);
+          snapshot={...snapshot,capture:hydrated,markdown,hash:hash(markdown)};this.chats.snapshots.set(a.captureId,snapshot);
+        } else if(snapshot.capture.messages.some(m=>m.attachments.some(a=>['image','localImage'].includes(a.type)))||snapshot.capture.warnings.some(w=>/图片/.test(w)))throw new Error('网页记录尚未保存图片原文件；请使用 1.2.0 配套扩展重新导出。');
+      }
+      const images=includeImages?snapshot.capture.images:[];
+      if(images.some(i=>i.error))throw new Error('无法完整保存图片：'+images.filter(i=>i.error).map(i=>`${i.name}：${i.error}`).join('；'));
+      const textCapture=includeImages?snapshot.capture:{...snapshot.capture,imageCoverage:'not-captured',warnings:[...snapshot.capture.warnings,'本次仅保存文字，未复制图片。'],messages:snapshot.capture.messages.map(m=>({...m,imageReferences:[],attachments:m.attachments.map(({imageId,...a})=>a)}))};
+      const text=a.mode==='original'?(includeImages?snapshot.markdown:renderChat(textCapture)):`# ${snapshot.capture.title.replace(/[\r\n]/g,' ')}（摘要）\n\n来源：${snapshot.capture.source}\n聊天 ID：${snapshot.capture.conversationId}\n原文 SHA-256：${snapshot.hash}\n抓取时间：${snapshot.capture.capturedAt}\n\n${textCapture.warnings.map(w=>'> '+w).join('\n')}\n\n${a.summaryMarkdown}${images.length?'\n\n## 原聊天图片\n\n'+imageMarkdown(snapshot.capture):''}`;
       if(Buffer.byteLength(text)>MAX_CHAT_BYTES)throw new Error('待保存记录超过 8 MiB；未截断，请分段保存。');
-      const result=await this.prepare(a.parentId?'siyuan_append_content':'siyuan_create_document',a.parentId?{parentId:a.parentId,markdown:text}:{notebook:a.notebook,path:a.path,markdown:text});
-      return {...result,captureId:a.captureId,mode:a.mode,sourceHash:snapshot.hash,messageCount:snapshot.capture.messages.length};
+      const result=await this.prepare(a.parentId?'siyuan_append_content':'siyuan_create_document',a.parentId?{parentId:a.parentId,markdown:text}:{notebook:a.notebook,path:a.path,markdown:text},images);
+      return {...result,captureId:a.captureId,mode:a.mode,sourceHash:snapshot.hash,messageCount:snapshot.capture.messages.length,includeImages,imageCount:images.length};
     }
     if(name==='settings.read')return this.settings();
     if(name==='settings.update') {if(this.busy)throw new Error('写入确认期间无法修改连接。');const c=await this.config.load();await this.config.save({...c,...a.set});this.pending.clear();return {values:{apiUrl:normalizeUrl(a.set.apiUrl)}};}
@@ -195,7 +216,7 @@ export class Service {
     if(name==='siyuan_commit_write')return this.commit(a.operationId,signal,a.confirmationUi??'native');
     return this.prepare(name,a);
   }
-  async prepare(name,a) {
+  async prepare(name,a,images=[]) {
     for(const [id,p]of this.pending)if(p.expiresAt<=this.now())this.pending.delete(id);
     if(this.pending.size>=30)throw new Error('待确认预览过多，请先取消或执行。');
     const session=await this.api.session();
@@ -222,11 +243,12 @@ export class Service {
     }
     const operationId=randomUUID(),expiresAt=this.now()+600000;
     const action={'siyuan_create_document':'创建文档','siyuan_append_content':'追加内容','siyuan_update_block':'替换块（容器的子块也可能被替换）'}[name];
-    const message=`思源笔记写入确认\n操作：${action}\nAPI：${session.apiUrl}\n${target}\n\n${before!==null?`原内容（完整）：\n${before}\n\n`:''}待写入内容（完整）：\n${a.markdown}\n\n仅点击 Confirm 或确认复选框才执行；取消不会写入。`;
+    const imageNotice=images.length?`\n图片：${images.length} 个原文件，共 ${images.reduce((n,i)=>n+i.bytes,0)} 字节。确认后上传到思源 /assets/ 并替换正文图片引用；不缩放、不重新编码。\n图片清单（名称 / SHA-256）：\n${images.map(i=>`${i.name} / ${i.id}`).join('\n')}\n资源上传和正文创建不是同一事务；中断时可能已留下资源文件，不能自动重试。\n`:'';
+    const message=`思源笔记写入确认\n操作：${action}\nAPI：${session.apiUrl}\n${target}${imageNotice}\n\n${before!==null?`原内容（完整）：\n${before}\n\n`:''}待写入内容（完整）：\n${a.markdown}\n\n仅点击 Confirm 或确认复选框才执行；取消不会写入。`;
     const boundedTarget=target.length>1200?target.slice(0,850)+'\n…（完整路径见独立窗口或完整预览）…\n'+target.slice(-300):target;
     const excerpt=a.markdown.length>240?a.markdown.slice(0,120)+'\n…（正文省略）…\n'+a.markdown.slice(-120):a.markdown;
-    const summary=`思源笔记写入确认\n操作：${action}\nAPI：${session.apiUrl}\n${boundedTarget}\n\n待写入：${a.markdown.length} 字符\nSHA-256：${hash(a.markdown)}\n${before!==null?'将替换/追加到已预览的目标内容；完整原内容见预览。\n':''}\n正文节选：\n${excerpt}\n\n独立窗口提供可滚动全文，按钮固定在底部。宿主备用表单只显示摘要；完整内容可由 siyuan_read_write_preview 分页核对。仅用户确认才写入；取消不会写入。`;
-    this.pending.set(operationId,{operationId,expiresAt,connection,endpoint,body,before,message,summary});
+    const summary=`思源笔记写入确认\n操作：${action}\nAPI：${session.apiUrl}\n${boundedTarget}\n\n待写入：${a.markdown.length} 字符\n图片：${images.length} 个原文件，${images.reduce((n,i)=>n+i.bytes,0)} 字节；确认后上传资源并替换引用。\nSHA-256：${hash(a.markdown)}\n${before!==null?'将替换/追加到已预览的目标内容；完整原内容见预览。\n':''}\n正文节选：\n${excerpt}\n\n独立窗口提供可滚动全文，按钮固定在底部。宿主备用表单只显示摘要；完整内容可由 siyuan_read_write_preview 分页核对。仅用户确认才写入；取消不会写入。`;
+    this.pending.set(operationId,{operationId,expiresAt,connection,endpoint,body,before,message,summary,images:structuredClone(images)});
     const previewTruncated=message.length>4000;
     return {status:'awaiting_confirmation',operationId,expiresAt:new Date(expiresAt).toISOString(),preview:previewTruncated?summary:message,previewTruncated,previewCharacters:message.length,contentCharacters:a.markdown.length,contentHash:hash(a.markdown),confirmationUi:'native',fullPreviewTool:'siyuan_read_write_preview'};
   }
@@ -248,8 +270,25 @@ export class Service {
         if(hash(current)!==hash(p.before))throw new Error('确认期间目标内容已变化，本次未写入。请重新读取并准备预览。');
       }
       if(signal?.aborted)throw new Error('请求已取消，本次未写入。');
-      const data=await this.api.post(p.endpoint,p.body,session);
-      return {status:'completed',written:true,data,verification:'通过读块核对实际结果；搜索索引可能延迟。'};
+      let assets={};
+      if(p.images.length) {
+        try {
+          const uploaded=await this.api.uploadImages(p.images,session,signal);
+          for(const [index,i]of p.images.entries()) {
+            const asset=Array.isArray(uploaded?.succFiles)?uploaded.succFiles.find(f=>f.index===index&&f.name===i.name)?.path:uploaded?.succMap?.[i.name];
+            if(asset){replaceImageLinks('',[i],{[i.id]:asset});assets[i.id]=asset;}
+          }
+          if(p.images.some(i=>!assets[i.id])||uploaded?.errFiles?.length||uploaded?.failedFiles?.length)throw new Error('思源未确认所有图片上传成功，正文未写入。');
+          if(signal?.aborted)throw new Error('请求已取消，正文未写入。');
+          if(p.expiresAt<=this.now())throw new Error('上传时预览已过期，正文未写入。');
+          const currentSession=await this.api.session();if(hash(JSON.stringify({apiUrl:currentSession.apiUrl,token:currentSession.token}))!==p.connection)throw new Error('上传期间连接变化，正文未写入。');
+          if(p.before!==null&&hash(kramdown(await this.api.post('/api/block/getBlockKramdown',{id:p.body.id??p.body.parentID},session)))!==hash(p.before))throw new Error('上传期间目标内容变化，正文未写入。');
+          const field=p.endpoint==='/api/filetree/createDocWithMd'?'markdown':'data';p.body={...p.body,[field]:replaceImageLinks(p.body[field],p.images,assets)};
+        } catch(e){return {status:'asset_upload_incomplete',written:false,assets,error:e.message,verification:'资源可能已上传；正文未写入。先检查思源资源，勿直接重试。'};}
+      }
+      if(signal?.aborted)return {status:'cancelled',written:false,assets,verification:'正文未写入；已上传的资源可能保留。'};
+      let data;try{data=await this.api.post(p.endpoint,p.body,session);}catch(e){if(!p.images.length)throw e;return {status:'document_write_uncertain',written:null,assets,error:e.message,verification:'正文写入结果不确定；先读取目标核对，勿直接重试。'};}
+      return {status:'completed',written:true,data,assets,imageCount:p.images.length,verification:'通过读块核对实际结果及 assets 图片引用；搜索索引可能延迟。'};
     } finally {this.busy=false;}
   }
 }
