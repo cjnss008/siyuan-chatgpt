@@ -51,7 +51,9 @@ $form.Add_Shown({
   $cancel.Focus()
 })
 if ($Mode -eq 'confirm') {
-  $form.Text = '思源笔记 · 写入确认'
+  # ASCII source is portable to Windows PowerShell 5.1, which reads BOM-less
+  # scripts using the system ANSI code page. The JSON input remains UTF-8.
+  $form.Text = -join ([char[]]@(0x601D,0x6E90,0x7B14,0x8BB0,0x20,0xB7,0x20,0x5199,0x5165,0x786E,0x8BA4))
   $form.AutoScaleMode = 'Dpi'
   $form.FormBorderStyle = 'Sizable'
   $area = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
@@ -64,8 +66,8 @@ if ($Mode -eq 'confirm') {
   $footer.Height = 48
   $footer.FlowDirection = 'RightToLeft'
   $footer.WrapContents = $false
-  $cancel.Text = '取消'
-  $save.Text = '确认写入'
+  $cancel.Text = -join ([char[]]@(0x53D6,0x6D88))
+  $save.Text = -join ([char[]]@(0x786E,0x8BA4,0x5199,0x5165))
   $footer.Controls.AddRange(@($cancel,$save))
   $text = [Windows.Forms.RichTextBox]::new()
   $text.ReadOnly = $true
