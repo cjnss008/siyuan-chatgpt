@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "siyuan-local",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "在 Windows 本机连接思源笔记，抓取当前聊天文字和图片，确认后保存原文或摘要。",
   "author": {
     "name": "SiYuan Local Plugin"
