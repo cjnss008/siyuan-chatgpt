@@ -28,5 +28,5 @@ description: 用户要抓取当前 Codex 桌面或 ChatGPT 网页聊天完整文
 - 原文：调用 siyuan_save_captured_chat(mode=original,captureId=...)，不传 summaryMarkdown。服务器直接使用不可变快照，避免模型改写、漏段和长文本工具参数截断。
 - 摘要：用 siyuan_read_captured_chat 分页读完快照，直到 nextOffset=null，再总结。保留结论、关键事实、代码或操作、未解决问题和待办；明确标记摘要。调用 siyuan_save_captured_chat(mode=summary,summaryMarkdown=...)。
 - 新建明确 notebook/path；追加明确 parentId，不能默认选择笔记本或混用目的地。
-- 保存工具仅返回待确认预览。按照 siyuan-notes 的写入流程展示目的地与内容，再调用 siyuan_commit_write。用户拒绝后停止。成功后读块核对，不自动重试不确定的写入。
+- 保存工具仅返回待确认预览；长记录的 preview 是短摘要，previewTruncated=true。完整预览可用 siyuan_read_write_preview 分页读取。展示目的地、消息数、字符数和抓取范围，避免向审批表单或工具日志塞入整篇聊天。调用 siyuan_commit_write 默认使用独立 Windows 窗口，窗口提供可滚动全文和固定按钮；不默认使用宿主表单。用户拒绝后停止。界面没有确认控件时不要反复重试同一路径。成功后读块核对，不自动重试不确定的写入。
 - 快照只保存在插件进程内存中，一小时过期；重新加载后需重新抓取。上限 8 MiB，超限报错，不静默截断。
